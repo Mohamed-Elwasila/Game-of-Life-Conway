@@ -227,9 +227,9 @@ This implementation serves as a reference for:
 - **MapReduce**: Influence on worker coordination model
 - **Actor Model**: Workers as independent actors with message passing
 
-## License
+## Acknowledgments
 
-This project was developed as part of the University of Bristol CSA coursework (2025).
+This project was developed as part of the University of Bristol CSA coursework (2025) and has been adapted for public release..
 
 
 ---
