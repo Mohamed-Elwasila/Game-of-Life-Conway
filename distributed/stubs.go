@@ -29,9 +29,9 @@ type InitResponse struct {
 }
 
 type HaloRequest struct {
-	Row      []byte
-	IsTop    bool
-	TurnNum  int
+	Row     []byte
+	IsTop   bool
+	TurnNum int
 }
 
 type HaloResponse struct {
@@ -108,16 +108,16 @@ type BrokerSyncResponse struct {
 }
 
 type BrokerHeartbeatRequest struct {
-	BrokerID   string
-	Term       int
-	IsLeader   bool
-	LastTurn   int
+	BrokerID string
+	Term     int
+	IsLeader bool
+	LastTurn int
 }
 
 type BrokerHeartbeatResponse struct {
-	Success    bool
-	Term       int
-	IsLeader   bool
+	Success  bool
+	Term     int
+	IsLeader bool
 }
 
 type Worker interface {
