@@ -10,10 +10,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        go-version: [1.21.x, 1.22.x]
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -21,7 +17,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version: 1.22.x
 
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -30,6 +26,11 @@ jobs:
         key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
+
+    - name: Install SDL2 dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsdl2-dev
 
     - name: Download dependencies
       run: go mod download
