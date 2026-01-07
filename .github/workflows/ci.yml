@@ -37,8 +37,21 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
+    - name: Start broker
+      run: |
+        go run ./broker &
+        sleep 2
+
+    - name: Start workers
+      run: |
+        go run ./worker -port 8040 &
+        go run ./worker -port 8041 &
+        go run ./worker -port 8042 &
+        go run ./worker -port 8043 &
+        sleep 2
+
     - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
+      run: go test -v -race -coverprofile=coverage.out -timeout 5m ./...
 
     - name: Check test coverage
       run: go tool cover -func=coverage.out
