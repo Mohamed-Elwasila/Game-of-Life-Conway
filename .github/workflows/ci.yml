@@ -45,10 +45,10 @@ jobs:
 
     - name: Start workers
       run: |
-        go run ./worker -port 8040 &
-        go run ./worker -port 8041 &
-        go run ./worker -port 8042 &
-        go run ./worker -port 8043 &
+        go run ./worker -port 8031 &
+        go run ./worker -port 8032 &
+        go run ./worker -port 8033 &
+        go run ./worker -port 8034 &
         sleep 2
 
     - name: Run tests
