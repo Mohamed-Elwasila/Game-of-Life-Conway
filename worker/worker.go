@@ -63,8 +63,8 @@ func (w *WorkerOps) Init(req distributed.InitRequest, res *distributed.InitRespo
 		w.neighbors.bottom = distributed.WorkerAddresses[0]
 	}
 
-	// Establish persistent connections to neighbor workers
-	w.connectToNeighbors()
+	// Don't connect to neighbors immediately - wait until first ProcessTurn
+	// This avoids connection failures if neighbors aren't initialized yet
 
 	res.Success = true
 	return nil
@@ -209,6 +209,15 @@ func (w *WorkerOps) processSection(startRow, endRow int, newWorld [][]byte, flip
 }
 
 func (w *WorkerOps) ProcessTurn(req distributed.ProcessTurnRequest, res *distributed.ProcessTurnResponse) error {
+	// Ensure neighbor connections exist on first turn
+	w.neighborClients.mu.RLock()
+	needsConnection := w.neighborClients.topClient == nil || w.neighborClients.bottomClient == nil
+	w.neighborClients.mu.RUnlock()
+
+	if needsConnection {
+		w.connectToNeighbors()
+	}
+
 	w.mu.Lock()
 
 	if len(w.world) == 0 {
