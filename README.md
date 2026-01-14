@@ -6,29 +6,7 @@ A high-performance, fault-tolerant distributed implementation of Conway's Game o
 
 ### System Overview
 
-```
-┌─────────────────┐
-│   Controller    │  Local controller with SDL visualization
-│  (distributor)  │  Handles user input and image I/O
-└────────┬────────┘
-         │ RPC
-         ▼
-┌─────────────────┐
-│  Broker Cluster │  Leader-elected coordination layer
-│  (Primary +     │  • Distributes work to workers
-│   Backups)      │  • Manages worker health
-└────────┬────────┘  • Leader election via heartbeat
-         │ RPC
-         ▼
-┌────────────────────────────────────┐
-│         Worker Pool                │
-│  ┌──────┐  ┌──────┐  ┌──────┐    │
-│  │ W1   │◄─┤ W2   │◄─┤ W3   │◄───┼─┐
-│  │      ├─►│      ├─►│      ├───►│ │ Halo Exchange
-│  └──────┘  └──────┘  └──────┘    │ │ (Worker-to-Worker)
-└────────────────────────────────────┘ │
-                                      ─┘
-```
+![System Overview](images/gol.drawio.png)
 
 ### Key Design Patterns
 

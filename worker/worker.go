@@ -14,7 +14,8 @@ import (
 
 type WorkerOps struct {
 	mu          sync.RWMutex
-	world       [][]byte
+	world       [][]byte // current state (read-only during turn processing)
+	nextWorld   [][]byte // write buffer for next state
 	topHalo     []byte
 	bottomHalo  []byte
 	imageWidth  int
@@ -33,6 +34,12 @@ type WorkerOps struct {
 		bottomClient *rpc.Client
 		mu           sync.RWMutex
 	}
+	// Synchronization for halo exchange
+	haloMu            sync.Mutex
+	haloTurn          int
+	topHaloReceived   bool
+	bottomHaloReceived bool
+	haloCond          *sync.Cond
 }
 
 func (w *WorkerOps) Init(req distributed.InitRequest, res *distributed.InitResponse) error {
@@ -48,8 +55,20 @@ func (w *WorkerOps) Init(req distributed.InitRequest, res *distributed.InitRespo
 	w.threads = req.Threads
 	w.currentTurn = 0
 
+	// Initialize nextWorld buffer
+	w.nextWorld = make([][]byte, len(req.World))
+	for i := range w.nextWorld {
+		w.nextWorld[i] = make([]byte, w.imageWidth)
+	}
+
 	w.topHalo = make([]byte, w.imageWidth)
 	w.bottomHalo = make([]byte, w.imageWidth)
+
+	// Initialize halo synchronization
+	w.haloCond = sync.NewCond(&w.haloMu)
+	w.haloTurn = 0
+	w.topHaloReceived = false
+	w.bottomHaloReceived = false
 
 	numWorkers := len(distributed.WorkerAddresses)
 	if w.workerID > 0 {
@@ -136,15 +155,59 @@ func (w *WorkerOps) reconnectNeighbor(isTop bool) {
 
 func (w *WorkerOps) ReceiveHalo(req distributed.HaloRequest, res *distributed.HaloResponse) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if req.IsTop {
 		copy(w.topHalo, req.Row)
+		log.Printf("Worker %d: received top halo for turn %d, len=%d, non-zero=%d",
+			w.workerID, req.TurnNum, len(req.Row), countNonZero(req.Row))
 	} else {
 		copy(w.bottomHalo, req.Row)
+		log.Printf("Worker %d: received bottom halo for turn %d, len=%d, non-zero=%d",
+			w.workerID, req.TurnNum, len(req.Row), countNonZero(req.Row))
 	}
+	w.mu.Unlock()
+
+	// Signal that a halo has been received for the current turn
+	// Only set flag if this halo is for the current or a future turn
+	w.haloMu.Lock()
+	if req.TurnNum >= w.haloTurn {
+		if req.IsTop {
+			w.topHaloReceived = true
+		} else {
+			w.bottomHaloReceived = true
+		}
+		w.haloCond.Broadcast()
+	}
+	w.haloMu.Unlock()
 
 	res.Success = true
+	return nil
+}
+
+func countNonZero(row []byte) int {
+	count := 0
+	for _, b := range row {
+		if b != 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func (w *WorkerOps) GetHaloRow(req distributed.GetHaloRowRequest, res *distributed.GetHaloRowResponse) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if len(w.world) == 0 {
+		return fmt.Errorf("worker not initialized")
+	}
+
+	res.Row = make([]byte, w.imageWidth)
+	if req.IsTop {
+		copy(res.Row, w.world[0])
+	} else {
+		copy(res.Row, w.world[len(w.world)-1])
+	}
+
 	return nil
 }
 
@@ -225,6 +288,7 @@ func (w *WorkerOps) ProcessTurn(req distributed.ProcessTurnRequest, res *distrib
 		return fmt.Errorf("worker not initialized")
 	}
 
+	// Copy our border rows to send to neighbors
 	topRow := make([]byte, w.imageWidth)
 	bottomRow := make([]byte, w.imageWidth)
 	copy(topRow, w.world[0])
@@ -232,59 +296,84 @@ func (w *WorkerOps) ProcessTurn(req distributed.ProcessTurnRequest, res *distrib
 
 	w.mu.Unlock()
 
+	// Reset halo receive flags for this turn
+	w.haloMu.Lock()
+	w.haloTurn = req.TurnNum
+	w.topHaloReceived = false
+	w.bottomHaloReceived = false
+	w.haloMu.Unlock()
+
+	// Push-based halo exchange: send our border rows to neighbors
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Send bottom row to bottom neighbor using persistent connection
+	// Send our bottom row to bottom neighbor (becomes their top halo)
 	go func() {
 		defer wg.Done()
 		w.neighborClients.mu.RLock()
 		client := w.neighborClients.bottomClient
 		w.neighborClients.mu.RUnlock()
 
+		if client == nil {
+			w.reconnectNeighbor(false)
+			w.neighborClients.mu.RLock()
+			client = w.neighborClients.bottomClient
+			w.neighborClients.mu.RUnlock()
+		}
+
 		if client != nil {
 			haloReq := distributed.HaloRequest{Row: bottomRow, IsTop: true, TurnNum: req.TurnNum}
 			var haloRes distributed.HaloResponse
 			err := client.Call("WorkerOps.ReceiveHalo", haloReq, &haloRes)
 			if err != nil {
-				log.Printf("Failed to send halo to bottom neighbor, reconnecting: %v", err)
-				w.reconnectNeighbor(false) // false = bottom
+				log.Printf("Failed to send halo to bottom neighbor: %v", err)
+				w.reconnectNeighbor(false)
 			}
-		} else {
-			w.reconnectNeighbor(false)
 		}
 	}()
 
-	// Send top row to top neighbor using persistent connection
+	// Send our top row to top neighbor (becomes their bottom halo)
 	go func() {
 		defer wg.Done()
 		w.neighborClients.mu.RLock()
 		client := w.neighborClients.topClient
 		w.neighborClients.mu.RUnlock()
 
+		if client == nil {
+			w.reconnectNeighbor(true)
+			w.neighborClients.mu.RLock()
+			client = w.neighborClients.topClient
+			w.neighborClients.mu.RUnlock()
+		}
+
 		if client != nil {
 			haloReq := distributed.HaloRequest{Row: topRow, IsTop: false, TurnNum: req.TurnNum}
 			var haloRes distributed.HaloResponse
 			err := client.Call("WorkerOps.ReceiveHalo", haloReq, &haloRes)
 			if err != nil {
-				log.Printf("Failed to send halo to top neighbor, reconnecting: %v", err)
-				w.reconnectNeighbor(true) // true = top
+				log.Printf("Failed to send halo to top neighbor: %v", err)
+				w.reconnectNeighbor(true)
 			}
-		} else {
-			w.reconnectNeighbor(true)
 		}
 	}()
 
+	// Wait for our sends to complete
 	wg.Wait()
+
+	// Wait until we've received both halos from our neighbors
+	w.haloMu.Lock()
+	for !w.topHaloReceived || !w.bottomHaloReceived {
+		w.haloCond.Wait()
+	}
+	w.haloMu.Unlock()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	newWorld := make([][]byte, len(w.world))
-	for i := range newWorld {
-		newWorld[i] = make([]byte, w.imageWidth)
-	}
+	log.Printf("Worker %d: turn %d, starting computation. topHalo non-zero=%d, bottomHalo non-zero=%d, world rows=%d",
+		w.workerID, req.TurnNum, countNonZero(w.topHalo), countNonZero(w.bottomHalo), len(w.world))
 
+	// Use nextWorld as the write buffer (double-buffering)
 	var flipped []util.Cell
 	var flippedMu sync.Mutex
 
@@ -300,15 +389,16 @@ func (w *WorkerOps) ProcessTurn(req distributed.ProcessTurnRequest, res *distrib
 			wg2.Add(1)
 			go func(s, e int) {
 				defer wg2.Done()
-				w.processSection(s, e, newWorld, &flipped, &flippedMu)
+				w.processSection(s, e, w.nextWorld, &flipped, &flippedMu)
 			}(start, end)
 		}
 		wg2.Wait()
 	} else {
-		w.processSection(0, len(w.world), newWorld, &flipped, &flippedMu)
+		w.processSection(0, len(w.world), w.nextWorld, &flipped, &flippedMu)
 	}
 
-	w.world = newWorld
+	// Swap world and nextWorld (double-buffer swap)
+	w.world, w.nextWorld = w.nextWorld, w.world
 	w.currentTurn = req.TurnNum
 
 	res.Flipped = flipped

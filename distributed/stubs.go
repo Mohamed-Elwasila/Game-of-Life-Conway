@@ -38,6 +38,15 @@ type HaloResponse struct {
 	Success bool
 }
 
+type GetHaloRowRequest struct {
+	IsTop   bool
+	TurnNum int
+}
+
+type GetHaloRowResponse struct {
+	Row []byte
+}
+
 type ProcessTurnRequest struct {
 	TurnNum int
 }
@@ -124,6 +133,7 @@ type Worker interface {
 	Init(req InitRequest, res *InitResponse) error
 	ProcessTurn(req ProcessTurnRequest, res *ProcessTurnResponse) error
 	ReceiveHalo(req HaloRequest, res *HaloResponse) error
+	GetHaloRow(req GetHaloRowRequest, res *GetHaloRowResponse) error
 	GetState(req GetStateRequest, res *GetStateResponse) error
 	Shutdown(req struct{}, res *struct{}) error
 }

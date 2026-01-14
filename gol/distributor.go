@@ -223,25 +223,27 @@ func distributor(p Params, c distributorChannels) {
 		}
 	}()
 
-	for turn = 0; turn < p.Turns; turn++ {
+	for t := 0; t < p.Turns; t++ {
 		select {
 		case key := <-c.keyPresses:
 			switch key {
 			case 's':
 				mu.RLock()
+				currentTurn := turn
+				mu.RUnlock()
 				var stateRes distributed.BrokerStateResponse
 				err := client.Call("BrokerOps.GetState", distributed.BrokerStateRequest{}, &stateRes)
 				if err == nil {
-					savePgm(p, c, stateRes.World, turn)
+					savePgm(p, c, stateRes.World, currentTurn)
 				}
-				mu.RUnlock()
 			case 'p':
 				mu.Lock()
 				paused = !paused
+				currentTurn := turn
 				if paused {
-					c.events <- StateChange{turn, Paused}
+					c.events <- StateChange{currentTurn, Paused}
 				} else {
-					c.events <- StateChange{turn, Executing}
+					c.events <- StateChange{currentTurn, Executing}
 				}
 				mu.Unlock()
 				for paused && !quitting {
@@ -249,16 +251,18 @@ func distributor(p Params, c distributorChannels) {
 					if key == 'p' {
 						mu.Lock()
 						paused = false
-						c.events <- StateChange{turn, Executing}
+						currentTurn := turn
+						c.events <- StateChange{currentTurn, Executing}
 						mu.Unlock()
 					} else if key == 's' {
 						mu.RLock()
+						currentTurn := turn
+						mu.RUnlock()
 						var stateRes distributed.BrokerStateResponse
 						err := client.Call("BrokerOps.GetState", distributed.BrokerStateRequest{}, &stateRes)
 						if err == nil {
-							savePgm(p, c, stateRes.World, turn)
+							savePgm(p, c, stateRes.World, currentTurn)
 						}
-						mu.RUnlock()
 					} else if key == 'q' {
 						quitting = true
 					}
@@ -276,12 +280,10 @@ func distributor(p Params, c distributorChannels) {
 			break
 		}
 
-		mu.Lock()
-		turnReq := distributed.BrokerTurnRequest{TurnNum: turn + 1}
+		turnReq := distributed.BrokerTurnRequest{TurnNum: t + 1}
 		var turnRes distributed.BrokerTurnResponse
 		err := client.Call("BrokerOps.ProcessTurn", turnReq, &turnRes)
 		if err != nil {
-			mu.Unlock()
 			for i, addr := range brokerAddrs {
 				if i == 0 {
 					continue
@@ -301,10 +303,14 @@ func distributor(p Params, c distributorChannels) {
 		}
 
 		for _, cell := range turnRes.Flipped {
-			c.events <- CellFlipped{CompletedTurns: turn + 1, Cell: cell}
+			c.events <- CellFlipped{CompletedTurns: t + 1, Cell: cell}
 		}
 
-		c.events <- TurnComplete{CompletedTurns: turn + 1}
+		c.events <- TurnComplete{CompletedTurns: t + 1}
+
+		// Update turn under lock for ticker goroutine to read
+		mu.Lock()
+		turn = t + 1
 		mu.Unlock()
 	}
 
