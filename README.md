@@ -1,4 +1,10 @@
 # Distributed Conway's Game of Life
+## Acknowledgments
+
+This project was developed as part of the University of Bristol CSA coursework (2025) and has been adapted from another private repo for public release
+
+### Unit catalogue link: [Computer Systems A](https://www.bris.ac.uk/unit-programme-catalogue/UnitDetails.jsa?unitCode=COMS20008)
+### Coursework link: [GOL Coursework](https://uob-csa.github.io/gol-docs/)
 
 A high-performance, fault-tolerant distributed implementation of Conway's Game of Life using Go and RPC. This project demonstrates advanced distributed systems concepts including consensus algorithms, halo exchange patterns, and zero-copy state management.
 
@@ -37,25 +43,14 @@ A high-performance, fault-tolerant distributed implementation of Conway's Game o
 - **Constant network overhead** per turn (only halo rows)
 - **Parallel state queries** when reconstruction needed
 
-### Network Efficiency
-| Operation | Data Transfer (512×512 board, 4 workers) |
-|-----------|-------------------------------------------|
-| **Halo Exchange** | 4KB per turn (boundary rows only) |
-| **Turn Processing** | ~8KB per turn (flipped cell coordinates) |
-| **State Query** | 256KB on-demand only |
+### Network Efficiency (512x512 board, 4 workers)
 
-**Naive Implementation:** 256KB × 2 (to/from broker) = 512KB per turn
-**This Implementation:** ~12KB per turn
-**Improvement:** 97.7% reduction in network traffic
+| Version | Data Transfer per Turn | Description |
+| ------- | ---------------------- | ----------- |
+| **V1 (Full World)** | 1,048,576 bytes | Entire world sent to each worker |
+| **V2/V3 (Halo Exchange)** | 266,240 bytes | Assigned rows + boundary halos only |
 
-### Latency Breakdown
-```
-Turn Processing (typical):
-├─ Halo Exchange:       2-5ms   (parallel, persistent connections)
-├─ Computation:         10-50ms (depends on board size & threads)
-└─ Flipped Cell Return: 1-2ms   (lightweight)
-Total: ~15-60ms per turn
-```
+**Improvement:** 74.6% reduction in network traffic per turn
 
 ## Fault Tolerance
 
@@ -87,35 +82,26 @@ Total: ~15-60ms per turn
 - **Defensive programming**: Comprehensive error handling, timeout mechanisms
 - **Idiomatic Go**: Goroutines for parallelism, interfaces for RPC contracts
 
-### Testing Infrastructure
-```
-tests/
-├── gol_test.go         # Core Game of Life logic
-├── keyboard_test.go    # Input handling (s, p, q, k)
-├── alive_test.go       # Cell counting correctness
-├── pgm_test.go         # Image I/O validation
-├── sdl_test.go         # Real-time visualization
-└── trace_test.go       # Event ordering verification
-```
+### Testing
+
+Tests were provided as part of the university coursework framework and validated correctness across board sizes (16x16, 64x64, 512x512), keyboard input handling (s, p, q, k), PGM image I/O, SDL rendering, and event trace ordering.
 
 ### Build & Run
 ```bash
-# Build all components
-cd broker && go build -o broker broker.go
-cd ../worker && go build -o worker worker.go
+# Build broker and worker binaries
+make build
 
-# Start broker cluster
-./broker/broker -port 8030 -primary=true -id=broker1 &
-./broker/broker -port 8040 -primary=false -id=broker2 &
-./broker/broker -port 8041 -primary=false -id=broker3 &
+# Start broker and all workers
+make start-services
 
-# Start worker pool
-for port in 8031 8032 8033 8034; do
-    ./worker/worker -port $port &
-done
-
-# Run controller
+# Run the controller
 go run .
+
+# Check status of running services
+make status
+
+# Stop all services
+make stop-services
 ```
 
 ## Distributed Systems Concepts Demonstrated
@@ -142,17 +128,39 @@ go run .
 
 ## Benchmarks & Metrics
 
-### Throughput (Turns per Second)
-| Board Size | Workers | Turns/s |
-|-----------|---------|---------|
-| 64×64     | 4       | ~200    |
-| 256×256   | 4       | ~100    |
-| 512×512   | 4       | ~50     |
-| 512×512   | 8       | ~80     |
+All benchmarks measured on 512x512 board, 1000 turns.
 
-*Measured on AWS t3.small instances (2 vCPU, 2GB RAM each)*
+### Implementation Comparison (localhost)
+
+| Implementation | Time (s) | Speedup vs V1 | vs Parallel |
+| -------------- | -------- | ------------- | ----------- |
+| Parallel (12 workers) | 1.50 | -- | 1.00x |
+| Distributed V1 (Full World) | 3.38 | 1.00x | 0.44x |
+| Distributed V2 (Halo Exchange) | 2.29 | 1.48x | 0.66x |
+| Distributed V3 (Hybrid) | 1.72 | 1.97x | 0.87x |
+
+### AWS Deployment (EC2, real network latency)
+
+| Version | Time (s) | Network Penalty |
+| ------- | -------- | --------------- |
+| V1 (Full World) | 43.20 | 28.8x vs parallel |
+| V2 (Halo Exchange) | 12.47 | 8.3x vs parallel |
+
+Halo exchange reduces the network bottleneck by 71% over real networks.
+
+### Post-Coursework Additions
+
+After the coursework submission, the following features were added to this repo:
+
+- Heartbeat-based leader election with term-based conflict resolution
+- Connection pooling with persistent RPC connections between workers
+- Primary-backup broker replication with automatic failover
+- On-demand state aggregation (zero-copy pattern)
+
+These have not been re-benchmarked.
 
 ### Failure Recovery Times
+
 - **Worker failure detected**: < 5s (via turn timeout)
 - **Worker reconnection**: 500-1500ms (3 retries)
 - **Broker failure detected**: 3s (heartbeat timeout)
@@ -160,25 +168,25 @@ go run .
 
 ## Configuration
 
-### Worker Addresses
-Edit `distributed/stubs.go` to configure worker nodes:
+### Addresses
+
+All addresses are configured in a single file: `distributed/stubs.go`. By default, everything runs on localhost:
+
 ```go
+var BrokerAddress = "127.0.0.1:8030"
+var BackupBrokerAddresses = []string{
+    "127.0.0.1:8040",
+    "127.0.0.1:8041",
+}
 var WorkerAddresses = []string{
-    "10.0.1.10:8031", // AWS worker 1
-    "10.0.1.11:8032", // AWS worker 2
-    "10.0.1.12:8033", // AWS worker 3
-    "10.0.1.13:8034", // AWS worker 4
+    "127.0.0.1:8031",
+    "127.0.0.1:8032",
+    "127.0.0.1:8033",
+    "127.0.0.1:8034",
 }
 ```
 
-### Broker Cluster
-```go
-var BrokerAddress = "10.0.1.20:8030" // Primary
-var BackupBrokerAddresses = []string{
-    "10.0.1.21:8040", // Backup 1
-    "10.0.1.22:8041", // Backup 2
-}
-```
+Update these addresses to deploy across multiple machines.
 
 ## Educational Value
 
@@ -191,12 +199,7 @@ This implementation serves as a reference for:
 
 ## Future Enhancements
 
-- [ ] Dynamic work rebalancing based on load
-- [ ] Raft consensus for broker cluster (full log replication)
-- [ ] Prometheus metrics exporter
-- [ ] gRPC migration for better performance
 - [ ] Docker Compose for easy deployment
-- [ ] Kubernetes operator for production orchestration
 
 ## Related Work
 
@@ -205,12 +208,7 @@ This implementation serves as a reference for:
 - **MapReduce**: Influence on worker coordination model
 - **Actor Model**: Workers as independent actors with message passing
 
-## Acknowledgments
-
-This project was developed as part of the University of Bristol CSA coursework (2025) and has been adapted for public release..
-
-
 ---
 
-**Built with:** Go 1.21+ · RPC · Concurrent Programming · Distributed Systems
+**Built with:** Go 1.17+ · RPC · Concurrent Programming · Distributed Systems
 **Demonstrates:** Consensus · Fault Tolerance · Performance Optimization · Clean Architecture

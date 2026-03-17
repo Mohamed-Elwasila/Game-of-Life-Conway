@@ -1,10 +1,14 @@
 # Build artifacts
 build/
+gameoflife
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+
+# Profiling artifacts
+trace.out
 
 # Test and runtime artifacts
 test-logs/
